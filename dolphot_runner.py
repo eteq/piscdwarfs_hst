@@ -1,6 +1,7 @@
 from __future__ import division
 
 import os
+import sys
 import subprocess
 
 
@@ -16,7 +17,8 @@ def find_dolphot(dirstocheck=None):
 
 
 class DolphotRunner(object):
-    def __init__(self, cmd, logfile, execpathordirs=None, workingdir='.'):
+    def __init__(self, cmd='dolphot', logfile='auto', paramfile='auto',
+                       execpathordirs=None, workingdir='.', params={}):
         """
         if `logfile` is "auto", it means use the first argument
         """
@@ -31,6 +33,8 @@ class DolphotRunner(object):
         self.workingdir = workingdir
         self.cmd = cmd
         self.logfile = logfile
+        self.paramfile = paramfile
+        self.params = params
 
     @property
     def workingdir(self):
@@ -40,17 +44,53 @@ class DolphotRunner(object):
         self._workingdir = os.path.abspath(value)
 
     def __call__(self, *args):
+        from time import sleep, time
+
         exec_path = os.path.join(self.dolphot_bin_dir, self.cmd)
         if self.logfile == 'auto':
             logfile = args[0] + '_' + self.cmd + '.log'
         else:
             logfile = self.logfile
 
+        if self.paramfile == 'auto':
+            paramfile = args[0] + '_' + self.cmd + '.param'
+        else:
+            paramfile = self.paramfile
+
         args = list(args)
         args.insert(0, exec_path)
+
+        if paramfile:
+            if self.params:
+                with open(paramfile, 'w') as f:
+                    for k, v in self.params.items():
+                        f.write('{0} = {1}\n'.format(k, v))
+                args.append('-p' + paramfile)
+        else:
+            for k, v in self.params.items():
+                args.append('{0}={1}'.format(k, v))
+
         p = subprocess.Popen(args, cwd=self.workingdir, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT)
-        self.last_out = p.communicate()[0]
+
+        output = []
+        stt = time()
+        while p.poll() is None:
+            print (time() - stt, '0')
+            p.stdout.flush()
+            line = p.stdout.readline()
+            if line == '':
+                print (time() - stt, '1')
+                sleep(.05)  # 50 ms pause
+            else:
+                print (time() - stt, '2')
+                output.append(line)
+                sys.stdout.write(line)
+                sys.stdout.flush()
+        print (time() - stt, '3')
+        output.append(p.stdout.read())
+        self.last_out = ''.join(output)
+
         if logfile is not None:
             with open(logfile, 'w') as f:
                 f.write(self.last_out)
