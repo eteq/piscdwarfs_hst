@@ -2,6 +2,8 @@ from __future__ import division
 
 import os
 import sys
+import pty
+import select
 import subprocess
 
 
@@ -44,7 +46,6 @@ class DolphotRunner(object):
         self._workingdir = os.path.abspath(value)
 
     def __call__(self, *args):
-        from time import sleep, time
 
         exec_path = os.path.join(self.dolphot_bin_dir, self.cmd)
         if self.logfile == 'auto':
@@ -62,7 +63,7 @@ class DolphotRunner(object):
 
         if paramfile:
             if self.params:
-                with open(paramfile, 'w') as f:
+                with open(os.path.join(self.workingdir, paramfile), 'w') as f:
                     for k, v in self.params.items():
                         f.write('{0} = {1}\n'.format(k, v))
                 args.append('-p' + paramfile)
@@ -70,29 +71,41 @@ class DolphotRunner(object):
             for k, v in self.params.items():
                 args.append('{0}={1}'.format(k, v))
 
-        p = subprocess.Popen(args, cwd=self.workingdir, stdout=subprocess.PIPE,
-                                   stderr=subprocess.STDOUT)
-
         output = []
-        stt = time()
-        while p.poll() is None:
-            print (time() - stt, '0')
-            p.stdout.flush()
-            line = p.stdout.readline()
-            if line == '':
-                print (time() - stt, '1')
-                sleep(.05)  # 50 ms pause
-            else:
-                print (time() - stt, '2')
-                output.append(line)
-                sys.stdout.write(line)
-                sys.stdout.flush()
-        print (time() - stt, '3')
-        output.append(p.stdout.read())
-        self.last_out = ''.join(output)
+        # now actually do the work with the process itself.  We use a pseudo-tty
+        # mostly just to allow line-buffering, which doesn't happen with pipes.
+        master_fd, slave_fd = pty.openpty()
+        try:
+
+            p = subprocess.Popen(args, cwd=self.workingdir, bufsize=1,
+                                       stdout=slave_fd, stderr=subprocess.STDOUT,
+                                       close_fds=True)
+
+            pty_timeout = .05 # 50 ms
+
+
+            donereading = False
+            while not donereading:
+                ready = select.select([master_fd], [], [], pty_timeout)[0]
+                if ready:
+                    data = os.read(master_fd, 512)
+                    if data:
+                        output.append(data)
+                        sys.stdout.write(data)
+                        sys.stdout.flush()
+                    else:
+                        donereading = True
+                elif p.poll() is not None:
+                    donereading = True
+        finally:
+            os.close(slave_fd) # can't do it sooner: it leads to errno.EIO error
+            os.close(master_fd)
+
+        # normalize line endings because it seems os.read doesn't?
+        self.last_out = ''.join(output).replace('\r\n','\n').replace('\r','\n')
 
         if logfile is not None:
-            with open(logfile, 'w') as f:
+            with open(os.path.join(self.workingdir, logfile), 'w') as f:
                 f.write(self.last_out)
 
         if p.returncode != 0:

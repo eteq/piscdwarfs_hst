@@ -2,12 +2,14 @@ from __future__ import division, print_function
 
 import os
 import shutil
+from warnings import warn
 
 import numpy as np
 
 from astropy.io import fits
 from astropy import units as u
 
+from dolphot_runner import DolphotRunner
 
 class Association(object):
     def __init__(self, asnfn):
@@ -58,7 +60,14 @@ class Association(object):
         """
         fltfn = self.flts[0]
         self.flt_header = hdr = fits.getheader(fltfn, 0)
-        self.filter = (hdr['FILTER1'], hdr['FILTER2'])
+
+        f1, f2 = (hdr['FILTER1'], hdr['FILTER2'])
+        if f1.lstrip().lower().startswith('clear'):
+            self.filter = f2.strip()
+        elif f2.lstrip().lower().startswith('clear'):
+            self.filter = f1.strip()
+        else:
+            self.filter = f1.strip() + '-' + f2.strip()
 
     @property
     def flts(self):
@@ -120,15 +129,17 @@ default_dolphot_params = {
 'Force1': '0',
 'Align': '2',
 'Rotate': '1',
-'ACSuseCTE': '1',
+#'ACSuseCTE': '1',  #done in the runner function
 'FlagMask': '4',
-'ACSpsfType': '0'
+'ACSpsfType': '0',
+'DiagPlotType': 'PS',
+'VerboseData': '1'
 }
 
-def do_dolphot(asns, dest_dir, allowexistingdata=False, dolphotpath=None, cte=True):
-    from warnings import warn
-    from dolphot_runner import DolphotRunner
+default_calcsky_args = ['15', '35', '-128', '2.25', '2.00']
 
+def copy_files(asns, dest_dir, allowexistingdata=False, cte=True):
+    from warnings import warn
 
     #first check that the destination dir exists and copy over the data
     if os.path.exists(dest_dir):
@@ -142,32 +153,162 @@ def do_dolphot(asns, dest_dir, allowexistingdata=False, dolphotpath=None, cte=Tr
     if not os.path.exists(dest_dir):
         os.mkdir(dest_dir)
 
-    rawfiles = []
-    rawexposures = []
+    toprocess_fns = []
     for asn in asns:
-        rawfiles.append(asn.drc if cte else asn.drz)
-        rawfiles.extend(asn.flcs if cte else asn.flts)
-        rawexposures.extend(asn.flcs if cte else asn.flts)
-        for fn in rawfiles:
+        tocpy = [asn.drc if cte else asn.drz]
+        tocpy.extend(asn.flcs if cte else asn.flts)
+        for fn in tocpy:
             targfn = os.path.join(dest_dir, os.path.split(fn)[-1])
+            toprocess_fns.append(os.path.split(targfn)[-1].strip())
             if os.path.exists(targfn):
                 print(targfn, 'already exists, not copying')
             else:
                 print('Copying', fn, '->', targfn)
                 shutil.copy(fn, targfn)
+    return toprocess_fns
 
-
+def do_prep(working_dir, toprocess_fns, dolphotpath=None, calcskyoverride=None):
+    outputs = {}
     #replace the 'acsmask' command with various acs commands later
-    acs_runner = DolphotRunner('acsmask', workingdir=dest_dir, execpathordirs=dolphotpath,
+    dptool_runner = DolphotRunner('acsmask', workingdir=working_dir, execpathordirs=dolphotpath,
                                           paramfile=None, logfile=None)
-    dolphot_runner = DolphotRunner('dolphot', workingdir=dest_dir, execpathordirs=dolphotpath,
-                                              params=default_dolphot_params)
 
-    print('\n...Running acsmask...\n')
-    acs_runner(*rawexposures)
+    #first we check if the drz/drc files are missing the FILETYPE header.  If so
+    #that means we ran acsmask already, so we skip them
+    acsmask_fns = []
+    for fn in toprocess_fns:
+        if '_drc.fits' in fn or '_drz.fits' in fn:
+            fullfn = os.path.join(working_dir, fn)
+            if 'DOL_ACS' in fits.getheader(fullfn, 1):
+                print('File', fn, 'has already been acsmasked.')
+                continue  # don't run acsmask on it
+        acsmask_fns.append(fn)
+
+    if len(acsmask_fns) > 0:
+        print('\n...Running acsmask...\n')
+        outputs[dptool_runner.cmd] = dptool_runner(*acsmask_fns)
 
     print('\n...Running splitgroups...\n')
-    acs_runner.cmd = 'splitgroups'
-    #return acs_runner(*rawfiles)
+    dptool_runner.cmd = 'splitgroups'
+    outputs[dptool_runner.cmd] = splout = dptool_runner(*toprocess_fns)
+
+    chip_fns = []
+    for line in splout.split('\n'):
+        if line.startswith('Writing FITS file '):
+            fn = line.split(':')[0].replace('Writing FITS file ', '').strip()
+            chip_fns.append(fn)
+
+    print('\n...Running calcsky...\n')
+    if calcskyoverride:
+        args = list(calcskyoverride)
+    else:
+        args = list(default_calcsky_args)
+    print('calcsky args:', args)
+    args.insert(0, '')  # replaced in the for loop
+
+    dptool_runner.cmd = 'calcsky'
+    outputs[dptool_runner.cmd] = calsky_outputs = []
+    for fn in chip_fns:
+        args[0] = fn.split('.fits')[0]
+        calsky_outputs.append(dptool_runner(*args))
+
+    return outputs
 
 
+def do_dolphot(working_dir, reffn, imgfns, outbase, dolphotpath=None, paramoverrides={}):
+    params = dict(default_dolphot_params)
+    params.update(paramoverrides)
+
+    #first check cte status
+    flts = flcs = drc = drz = False
+    for fn in imgfns:
+        if '_flt.fits' in fn:
+            flts = True
+        if '_flc.fits' in fn:
+            flcs = True
+    if '_drc.fits' in reffn:
+        drc = True
+    if '_drz.fits' in reffn:
+        drz = True
+
+    cte = None
+    if flts and flcs:
+        warn('Mixed flts and flcs - unclear if CTE correction should be applied!')
+    elif flts and drc:
+        warn('Mixed flts and CTEd drizzle - unclear if CTE correction should be applied!')
+    elif flcs and drz:
+        warn('Mixed flcs and CTEd not drizzle - unclear if CTE correction should be applied!')
+    elif flcs:
+        cte = True
+    elif flts:
+        cte = False
+
+    if cte:
+        if params.get('ACSuseCTE', False):
+            warn("You're using CTE corrected files but also asked for the correction... mistake?")
+        else:
+            print('Will not do CTE correction in dolphot')
+            params['ACSuseCTE'] = '0'
+
+    else:
+        if not params.get('ACSuseCTE', False):
+            warn("You're using CTE cunorrected files but also didn't ask for the correction... mistake?")
+        else:
+            print('Will do CTE correction in dolphot')
+            params['ACSuseCTE'] = '1'
+
+    params['Nimg'] = len(imgfns)
+    if reffn is not None:
+        params['img0_file'] = reffn.split('.fits')[0]
+    for i, fn in enumerate(imgfns):
+        params['img' + str(i+1) + '_file'] = fn.split('.fits')[0]
+
+    dolphot_runner = DolphotRunner('dolphot', workingdir=working_dir,
+                                   execpathordirs=dolphotpath, params=params)
+
+    return dolphot_runner(outbase)
+
+
+def do_all_dolphot(working_dir, asns, outbase, chipnum='all', cte=True,
+                   allowexistingdata=True, dolphotpath=None,
+                   calcskyoverride=None, dolphotparamoverrides={},
+                   reffn='guess'):
+
+    toprocess_fns = copy_files(asns, working_dir, cte=cte,
+                               allowexistingdata=allowexistingdata)
+
+    output = do_prep(working_dir, toprocess_fns, dolphotpath=dolphotpath,
+                     calcskyoverride=calcskyoverride)
+    output['prep_fns'] = toprocess_fns
+
+    imgfns = []
+    drfns = []
+    for line in output['splitgroups'].split('\n'):
+        if line.startswith('Writing FITS file '):
+            fn = line[18:].split(':')[0].strip()
+            if (cte and '_flc' in fn) or (not cte and '_flt' in fn):
+                imgfns.append(fn)
+            if (cte and '_drc' in fn) or (not cte and '_drt' in fn):
+                drfns.append(fn)
+    if reffn == 'guess':
+        if len(drfns) == 0:
+            warn('Could not find any ref files - not using ref')
+            reffn = None
+        else:
+            reffn = drfns[0]
+            if len(drfns) > 1:
+                warn('Found multiple possible drizzle refs.  Using first one.')
+
+    if chipnum != 'all':
+        chipstr = '.chip' + str(chipnum)
+        imgfns = [fn for fn in imgfns if chipstr in fn]
+
+    print('Running dolphot on', imgfns, 'with ref', reffn)
+
+    output['dolphot_reffn'] = reffn
+    output['dolphot_imgfns'] = imgfns
+    output['dolphot'] = do_dolphot(working_dir, reffn, imgfns, outbase,
+                                   dolphotpath=dolphotpath,
+                                   paramoverrides=dolphotparamoverrides)
+
+    return output
