@@ -138,7 +138,7 @@ default_dolphot_params = {
 
 default_calcsky_args = ['15', '35', '-128', '2.25', '2.00']
 
-def copy_files(asns, dest_dir, allowexistingdata=False, cte=True):
+def copy_files(asns, dest_dir, allowexistingdata=False, cte=True, incldrz=True):
     from warnings import warn
 
     #first check that the destination dir exists and copy over the data
@@ -155,7 +155,9 @@ def copy_files(asns, dest_dir, allowexistingdata=False, cte=True):
 
     toprocess_fns = []
     for asn in asns:
-        tocpy = [asn.drc if cte else asn.drz]
+        tocpy = []
+        if incldrz:
+            tocpy.append(asn.drc if cte else asn.drz)
         tocpy.extend(asn.flcs if cte else asn.flts)
         for fn in tocpy:
             targfn = os.path.join(dest_dir, os.path.split(fn)[-1])
@@ -312,3 +314,42 @@ def do_all_dolphot(working_dir, asns, outbase, chipnum='all', cte=True,
                                    paramoverrides=dolphotparamoverrides)
 
     return output
+
+
+def do_drizzle(asns, outname, working_dir='sameasoutname', cte=True, **options):
+    """
+    Note that this requires Ureka to be activated
+    """
+    from stsci.tools import teal
+    from drizzlepac import astrodrizzle
+
+    if working_dir == 'sameasoutname':
+        working_dir = outname
+
+    #toprocess_fns are *relative* to the working_dir, not absolute paths
+    toprocess_fns = copy_files(asns, working_dir, cte=cte, incldrz=False,
+                               allowexistingdata=True)
+
+    #reset to defaults
+    teal.unlearn('astrodrizzle')
+
+    options.setdefault('preserve', False)
+    options.setdefault('restore', False)
+
+    if len(set([asn.filter for asn in asns])) > 1:
+        if 'final_wht_type' not in options:
+            print("You are using multiple filters at the same time but didn't "
+                  "set a wheight type.  You probably don't want EXP, so we'll "
+                  "try IVM")
+            options['final_wht_type'] = 'IVM'
+
+    olddir = os.path.abspath(os.curdir)
+    try:
+        os.chdir(working_dir)
+        return astrodrizzle.AstroDrizzle(toprocess_fns, output=outname, **options)
+    finally:
+        os.chdir(olddir)
+
+
+
+
