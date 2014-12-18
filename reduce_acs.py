@@ -319,12 +319,20 @@ def do_all_dolphot(working_dir, asns, outbase, chipnum='all', cte=True,
 def do_drizzle(asns, outname, working_dir='sameasoutname', cte=True, **options):
     """
     Note that this requires Ureka to be activated
+
+    A good baseline of options for 2-image ACS/WFC is:
+    ``final_pixfrac=0.6,final_scale=.03, final_wcs=True``
+
+    `working_dir` can have the special value "sameasoutname", or anything ending
+    with an "_" will have `outname` added at the end
     """
     from stsci.tools import teal
     from drizzlepac import astrodrizzle
 
     if working_dir == 'sameasoutname':
         working_dir = outname
+    if working_dir.endswith('_'):
+        working_dir = working_dir + outname
 
     #toprocess_fns are *relative* to the working_dir, not absolute paths
     toprocess_fns = copy_files(asns, working_dir, cte=cte, incldrz=False,
@@ -346,9 +354,11 @@ def do_drizzle(asns, outname, working_dir='sameasoutname', cte=True, **options):
     olddir = os.path.abspath(os.curdir)
     try:
         os.chdir(working_dir)
-        return astrodrizzle.AstroDrizzle(toprocess_fns, output=outname, **options)
+        astrodrizzle.AstroDrizzle(toprocess_fns, output=outname, **options)
     finally:
         os.chdir(olddir)
+
+    return working_dir
 
 
 
