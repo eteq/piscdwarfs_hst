@@ -34,13 +34,20 @@ def normed_planck(lamb, T, fphot=True):
         return (Bl / totE).to(1/lamb.unit)
 
 
-def compute_T_ratio_grid(Ts, band1, band2):
+def compute_T_ratio_grid(Ts, band1, band2, mags=False):
     """
     Returns (T, ratio, wleff1, wleff2) (first twosorted on ratio).
     The `band#`s should be (wl, throughput)
 
+    The ratio is in the sense of flux_b1/flux_b2
+
     Note that the edge values of ratio will be set to asymptotic numbers
     (so the lowest and highest temps will not match ``Ts``'s)
+
+    `band1` and `band2` should be (2, N) of wl (in Angstroms) and flux
+
+    If `mags` is True, `ratio` is a magnitude difference (color) rather than a
+    flux ratio
     """
 
     wl1, throughput1 = band1
@@ -78,7 +85,28 @@ def compute_T_ratio_grid(Ts, band1, band2):
 
     #resort on ratio
     sorti = np.argsort(ratio)
+
+    if mags:
+        ratio = -2.5*np.log10(ratio)
+
     return newT[sorti].ravel(), ratio[sorti], leff1, leff2
+
+
+def band_ratio_plot(Ts, band1, band2, colormag=False, normedat=5800*u.K):
+    from matplotlib import pyplot as plt
+
+    Tgrid, ratio, leff1, leff2 = compute_T_ratio_grid(Ts, band1, band2, colormag)
+    plt.gca().set_axis_bgcolor('k')
+    plt.semilogy()
+    plt.scatter(ratio, Tgrid, lw=0, c=T_to_rgb(Tgrid, normedat=normedat))
+    if normedat:
+        plt.axhline(normedat.to(u.K).value, c='w')
+    if colormag:
+        plt.xlabel('color')
+    else:
+        plt.xlabel('flux ratio')
+    plt.ylabel('T [K]')
+    plt.ylim(Ts.max().value/-100, Ts.max().value)
 
 
 def eye_response(Ts, fn='smj10q.csv', normedat=None):
@@ -87,6 +115,8 @@ def eye_response(Ts, fn='smj10q.csv', normedat=None):
 
     ``normedat`` != None means a temperature to normalize everythin to 1 at
     """
+    if not hasattr(Ts, 'unit') or Ts.unit.physical_type != 'temperature':
+        raise TypeError('input to eye_response must be a temp quantity')
     Tshape = Ts.shape
 
     # load everything
@@ -127,12 +157,17 @@ def T_to_rgb(Ts, fn='smj10q.csv', normedat=None):
     Returned array is on [0,1] and has shape (T_shape..., 3)
     """
     respS, respM, respL = eye_response(Ts, fn, normedat)
+
     imarr = np.array([respL.value, respM.value, respS.value])
     imarr = imarr / np.max(imarr, axis=0)
-    return imarr.transpose(1, 2, 0)
+
+    #transpose only the first axis to the end
+    totrans = range(1, len(imarr.shape))
+    totrans.append(0)
+    return imarr.transpose(totrans)
 
 
-def two_color_image(fn1, fn2, rng1, rng2, savefn=None, sl1=None, sl2=None):
+def simple_two_color_image(fn1, fn2, rng1, rng2, savefn=None, sl1=None, sl2=None):
     """
     This takes two file names, loads them, remaps the values into the
     bounds specified by `rng1` and `rng2`, and combines them as R/B channels,
