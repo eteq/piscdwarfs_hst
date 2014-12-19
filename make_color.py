@@ -92,21 +92,29 @@ def compute_T_ratio_grid(Ts, band1, band2, mags=False):
     return newT[sorti].ravel(), ratio[sorti], leff1, leff2
 
 
-def band_ratio_plot(Ts, band1, band2, colormag=False, normedat=5800*u.K):
+def band_ratio_plot(Ts, band1, band2, colormag=False, normedat=5800*u.K, logy=True):
     from matplotlib import pyplot as plt
 
     Tgrid, ratio, leff1, leff2 = compute_T_ratio_grid(Ts, band1, band2, colormag)
     plt.gca().set_axis_bgcolor('k')
-    plt.semilogy()
-    plt.scatter(ratio, Tgrid, lw=0, c=T_to_rgb(Tgrid, normedat=normedat))
+    if logy:
+        Tgridy = np.log10(Tgrid/u.K)
+    else:
+        Tgridy = Tgrid
+    plt.scatter(ratio, Tgridy, lw=0, c=T_to_rgb(Tgrid, normedat=normedat))
     if normedat:
-        plt.axhline(normedat.to(u.K).value, c='w')
+        plt.axhline(np.log10(normedat/u.K).value if logy else normedat.to(u.K), c='w')
+
     if colormag:
         plt.xlabel('color')
     else:
         plt.xlabel('flux ratio')
-    plt.ylabel('T [K]')
-    plt.ylim(Ts.max().value/-100, Ts.max().value)
+
+    if logy:
+        plt.ylabel('log T [K]')
+    else:
+        plt.ylabel('T [K]')
+        plt.ylim(Ts.max().value/-100, Ts.max().value)
 
 
 def eye_response(Ts, fn='smj10q.csv', normedat=None):
@@ -148,23 +156,135 @@ def eye_response(Ts, fn='smj10q.csv', normedat=None):
     return respS.reshape(Tshape), respM.reshape(Tshape), respL.reshape(Tshape)
 
 
-def T_to_rgb(Ts, fn='smj10q.csv', normedat=None):
+def T_to_rgb(Ts, fn='smj10q.csv', normedat=None, modulatewith=None):
     """
     Uses `eye_response` to determine RGB colors.  Note that these are normalized
     so that the *maximum* of the 3 cones sets what 1 is, so saturated blue is
     impossible
 
-    Returned array is on [0,1] and has shape (T_shape..., 3)
+    Returned array is on [0,1] or is multiplied by `modulatewith` and has shape (T_shape..., 3)
     """
     respS, respM, respL = eye_response(Ts, fn, normedat)
 
     imarr = np.array([respL.value, respM.value, respS.value])
     imarr = imarr / np.max(imarr, axis=0)
 
+    if modulatewith is not None:
+        imarr = imarr * modulatewith
+
+
     #transpose only the first axis to the end
     totrans = range(1, len(imarr.shape))
     totrans.append(0)
     return imarr.transpose(totrans)
+
+
+def rescale(img, lower, upper, postfunc=None, lowerfill=None, upperfill=None):
+    rimg = (img-lower)/(upper-lower)
+    if lowerfill is not None:
+        lowermsk = rimg <= 0
+        rimg[lowermsk] = lowerfill
+    if upperfill is not None:
+        uppermsk = rimg >= 1
+        rimg[uppermsk] = upperfill
+
+    if postfunc:
+        return postfunc(rimg)
+    else:
+        return rimg
+
+
+def modulate_color_image(colorimg, lumimg):
+    totrans = range(len(colorimg.shape))
+    totrans.insert(0, totrans.pop(-1))
+    totrans2 = range(1, len(colorimg.shape))
+    totrans2.append(0)
+
+    return (colorimg.transpose(totrans) * lumimg).transpose(totrans2)
+
+
+def floatarr_to_image(arr, fn, notfinvalue=0):
+    """
+    arr should be (x, y, 3 or 4)
+    Will be clamped so that [0,1] -> [0,255]
+    """
+    import PIL.Image
+
+    imarr = arr.copy()
+
+    imarr[~np.isfinite(imarr)] = notfinvalue
+    imarr[imarr>1] = 1
+    imarr[imarr<0] = 0
+
+    imarr = (255*imarr).astype('uint8')
+
+    im = PIL.Image.fromarray(imarr, mode='RGB')
+    if fn is not None:
+        im.save(fn)
+    return im
+
+
+def prettify_acs_image(img1fn, img2fn, imgallfn, outfn,
+                       rescalelower=0., rescaleupper=.15, rescalefunc=None,
+                       msk=None, normedat=5800*u.K,
+                       band1fn='wfc_F606W.dat', band2fn='wfc_F814W.dat', convsize=1,
+                       Tsforgrid=np.logspace(2.75, 5, 250)*u.K,
+                       mintemp=2500*u.K,
+                       finalsmoothkernel=None):
+    from astropy import convolution
+
+    print('Loading data')
+    band1 = np.loadtxt(band1fn)
+    band1 = (band1[:, 0]*u.angstrom, band1[:, 1])
+    band2 = np.loadtxt(band2fn)
+    band2 = (band2[:, 0]*u.angstrom, band2[:, 1])
+
+    Tratios, ratios, leff1, leff2 = compute_T_ratio_grid(Tsforgrid, band1, band2)
+
+    img1 = fits.getdata(img1fn)
+    img2 = fits.getdata(img2fn)
+    imgall = fits.getdata(imgallfn)
+
+    if msk is not None:
+        print('Masking data')
+        img1 = img1[msk]
+        img2 = img2[msk]
+        imgall = imgall[msk]
+
+    print("Computing flux ratio")
+    ratioimg = img1/img2
+    print('Interpolating ratios to temperatures')
+    Timg = np.interp(ratioimg, ratios, Tratios, left=-1,right=-2)*u.K
+
+    print('Converting to RGB')
+    colorimg = T_to_rgb(Timg,normedat=normedat)
+    rescaledall = rescale(imgall, rescalelower, rescaleupper, rescalefunc, 0, 1)
+
+    #convolve and eliminate bad temps.  Control definition of bad through the t grid
+    if convsize:
+        print('Convolving and cleaning')
+        msk = ((Timg<mintemp)|~np.isfinite(Timg.value))
+        fixedrescaledall = rescaledall.copy()
+        fixedrescaledall[msk] = 0
+        k = convolution.Gaussian2DKernel(convsize)
+        k.array[k.shape[0]//2,k.shape[0]//2] = 0
+        convimg = convolution.convolve(fixedrescaledall,convolution.Gaussian2DKernel(1), normalize_kernel=True)
+        fixedrescaledall[msk] = convimg[msk]
+    else:
+        fixedrescaledall = rescaledall
+
+    outimgarr = modulate_color_image(colorimg, fixedrescaledall)
+
+    if finalsmoothkernel:
+        print('Doing final smoothing')
+        outimgarr = [convolution.convolve(outimgarr[i], finalsmoothkernel) for i in range(3)]
+        outimgarr = np.array(outimgarr, copy=False).transpose(2, 0, 1)
+
+    print('Saving to', outfn)
+    floatarr_to_image(outimgarr, outfn)
+
+    return locals()
+
 
 
 def simple_two_color_image(fn1, fn2, rng1, rng2, savefn=None, sl1=None, sl2=None):
