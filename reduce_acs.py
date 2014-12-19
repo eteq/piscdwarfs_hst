@@ -58,8 +58,13 @@ class Association(object):
         """
         Determines extra info from the flt of the first exposure
         """
-        fltfn = self.flts[0]
-        self.flt_header = hdr = fits.getheader(fltfn, 0)
+        try:
+            flfn = self.flts[0]
+            self.fl_header = hdr = fits.getheader(flfn, 0)
+        except IOError:
+            flfn = self.flcs[0]
+            self.fl_header = hdr = fits.getheader(flfn, 0)
+
 
         f1, f2 = (hdr['FILTER1'], hdr['FILTER2'])
         if f1.lstrip().lower().startswith('clear'):
@@ -138,7 +143,8 @@ default_dolphot_params = {
 
 default_calcsky_args = ['15', '35', '-128', '2.25', '2.00']
 
-def copy_files(asns, dest_dir, allowexistingdata=False, cte=True, incldrz=True):
+def copy_files(asns, dest_dir, allowexistingdata=False, cte=True, incldrz=True,
+               extrafns=[]):
     from warnings import warn
 
     #first check that the destination dir exists and copy over the data
@@ -167,13 +173,23 @@ def copy_files(asns, dest_dir, allowexistingdata=False, cte=True, incldrz=True):
             else:
                 print('Copying', fn, '->', targfn)
                 shutil.copy(fn, targfn)
+
+    for fn in extrafns:
+        targfn = os.path.join(dest_dir, os.path.split(fn)[-1])
+        if os.path.exists(targfn):
+            print(targfn, 'already exists, not copying')
+        else:
+            print('Copying', fn, '->', targfn)
+            shutil.copy(fn, targfn)
+
     return toprocess_fns
+
 
 def do_prep(working_dir, toprocess_fns, dolphotpath=None, calcskyoverride=None):
     outputs = {}
     #replace the 'acsmask' command with various acs commands later
     dptool_runner = DolphotRunner('acsmask', workingdir=working_dir, execpathordirs=dolphotpath,
-                                          paramfile=None, logfile=None)
+                                             paramfile=None, logfile=None)
 
     #first we check if the drz/drc files are missing the FILETYPE header.  If so
     #that means we ran acsmask already, so we skip them
@@ -254,7 +270,7 @@ def do_dolphot(working_dir, reffn, imgfns, outbase, dolphotpath=None, paramoverr
 
     else:
         if not params.get('ACSuseCTE', False):
-            warn("You're using CTE cunorrected files but also didn't ask for the correction... mistake?")
+            warn("You're using CTE uncorrected files but also didn't ask for the correction... mistake?")
         else:
             print('Will do CTE correction in dolphot')
             params['ACSuseCTE'] = '1'
@@ -276,8 +292,14 @@ def do_all_dolphot(working_dir, asns, outbase, chipnum='all', cte=True,
                    calcskyoverride=None, dolphotparamoverrides={},
                    reffn='guess'):
 
-    toprocess_fns = copy_files(asns, working_dir, cte=cte,
-                               allowexistingdata=allowexistingdata)
+    if reffn == 'guess':
+        toprocess_fns = copy_files(asns, working_dir, cte=cte, incldrz=True,
+                                   allowexistingdata=allowexistingdata)
+    else:
+        toprocess_fns = copy_files(asns, working_dir, cte=cte, incldrz=False,
+                                   allowexistingdata=allowexistingdata,
+                                   extrafns=[reffn])
+        toprocess_fns.append(os.path.split(reffn)[-1])
 
     output = do_prep(working_dir, toprocess_fns, dolphotpath=dolphotpath,
                      calcskyoverride=calcskyoverride)
@@ -300,6 +322,10 @@ def do_all_dolphot(working_dir, asns, outbase, chipnum='all', cte=True,
             reffn = drfns[0]
             if len(drfns) > 1:
                 warn('Found multiple possible drizzle refs.  Using first one.')
+    else:
+        # should have been copied and split, so we use the working_dir version
+        # that has already gotten splitgroup'd
+        reffn = os.path.split(reffn)[-1].replace('.fits', '.chip1.fits')
 
     if chipnum != 'all':
         chipstr = '.chip' + str(chipnum)
