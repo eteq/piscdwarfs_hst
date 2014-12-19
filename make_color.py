@@ -277,7 +277,7 @@ def prettify_acs_image(img1fn, img2fn, imgallfn, outfn,
 
     if finalsmoothkernel:
         print('Doing final smoothing')
-        outimgarr = [convolution.convolve(outimgarr[i], finalsmoothkernel) for i in range(3)]
+        outimgarr = [convolution.convolve(outimgarr[:, :, i], finalsmoothkernel) for i in range(3)]
         outimgarr = np.array(outimgarr, copy=False).transpose(2, 0, 1)
 
     print('Saving to', outfn)
