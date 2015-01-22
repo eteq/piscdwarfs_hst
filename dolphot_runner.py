@@ -49,7 +49,10 @@ class DolphotRunner(object):
 
         exec_path = os.path.join(self.dolphot_bin_dir, self.cmd)
         if self.logfile == 'auto':
-            logfile = args[0] + '_' + self.cmd + '.log'
+            if params.get('FakeStars', False):
+                logfile = args[0] + '_' + self.cmd + '_fakestars.log'
+            else:
+                logfile = args[0] + '_' + self.cmd + '.log'
         else:
             logfile = self.logfile
 

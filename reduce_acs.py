@@ -292,6 +292,9 @@ def do_all_dolphot(working_dir, asns, outbase, chipnum='all', cte=True,
                    calcskyoverride=None, dolphotparamoverrides={},
                    reffn='guess'):
 
+    if dolphotparamoverrides.get('FakeStars', False):
+        dolphotparamoverrides.setdefault('DiagPlotType', '')
+
     if reffn == 'guess':
         toprocess_fns = copy_files(asns, working_dir, cte=cte, incldrz=True,
                                    allowexistingdata=allowexistingdata)

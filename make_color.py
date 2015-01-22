@@ -230,7 +230,8 @@ def prettify_acs_image(img1fn, img2fn, imgallfn, outfn,
                        band1fn='wfc_F606W.dat', band2fn='wfc_F814W.dat', convsize=1,
                        Tsforgrid=np.logspace(2.75, 5, 250)*u.K,
                        mintemp=2500*u.K,
-                       finalsmoothkernel=None):
+                       finalsmoothkernel=None,
+                       _shortcutcolorimg=None):
     from astropy import convolution
 
     print('Loading data')
@@ -256,8 +257,12 @@ def prettify_acs_image(img1fn, img2fn, imgallfn, outfn,
     print('Interpolating ratios to temperatures')
     Timg = np.interp(ratioimg, ratios, Tratios, left=-1,right=-2)*u.K
 
-    print('Converting to RGB')
-    colorimg = T_to_rgb(Timg,normedat=normedat)
+    if _shortcutcolorimg is None:
+        print('Converting to RGB')
+        colorimg = T_to_rgb(Timg, normedat=normedat)
+    else:
+        print('Using supplied colorimg... might be inconsistent!')
+        colorimg = _shortcutcolorimg
     rescaledall = rescale(imgall, rescalelower, rescaleupper, rescalefunc, 0, 1)
 
     #convolve and eliminate bad temps.  Control definition of bad through the t grid
@@ -278,7 +283,7 @@ def prettify_acs_image(img1fn, img2fn, imgallfn, outfn,
     if finalsmoothkernel:
         print('Doing final smoothing')
         outimgarr = [convolution.convolve(outimgarr[:, :, i], finalsmoothkernel) for i in range(3)]
-        outimgarr = np.array(outimgarr, copy=False).transpose(2, 0, 1)
+        outimgarr = np.array(outimgarr, copy=False).transpose(1,2, 0)
 
     print('Saving to', outfn)
     floatarr_to_image(outimgarr, outfn)
