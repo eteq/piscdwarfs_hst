@@ -1,6 +1,7 @@
 from __future__ import division, print_function
 
 import numpy as np
+from scipy.special import erf, erfc
 
 import emcee
 from astropy import units as u
@@ -46,17 +47,21 @@ class RGBModel(object):
         gives the lnprob per data point
         """
         dmags = self.magdata - tipmag
-        rgbmsk = dmags > 0
-        lnpall = np.zeros_like(dmags)
+        if self.magunc is None:
+            rgbmsk = dmags > 0
+            lnpall = np.zeros_like(dmags)
 
-        lnpall[rgbmsk] = alphargb * dmags[rgbmsk]
-        lnpall[~rgbmsk] = alphaother * dmags[~rgbmsk] + np.log(fracother)
+            lnpall[rgbmsk] = alphargb * dmags[rgbmsk]
+            lnpall[~rgbmsk] = alphaother * dmags[~rgbmsk] + np.log(fracother)
 
-        eterm1 = 1 - np.exp(alphaother*(self.mindata - tipmag))
-        eterm2 = np.exp(alphargb*(self.maxdata - tipmag)) - 1
-        lnN = np.log(fracother * eterm1 / alphaother + eterm2 / alphargb)
+            eterm1 = 1 - np.exp(alphaother*(self.mindata - tipmag))
+            eterm2 = np.exp(alphargb*(self.maxdata - tipmag)) - 1
+            lnN = np.log(fracother * eterm1 / alphaother + eterm2 / alphargb)
 
-        return lnpall - lnN
+            return lnpall - lnN
+        else:
+            return np.log(exp_gauss_conv(dmags, self.alphargb, self.alphaother,
+                                                self.fracother, self.magunc))
 
     def __call__(self, params):
         lpri = self.lnpri(*params)
@@ -108,3 +113,13 @@ class RGBModel(object):
 
         return fakemod.magdata, lnpb
 
+
+def exp_gauss_conv(x, a=1, b=1, F=0, s=.1):
+    """
+    Convolution of broken power law w/ gaussian.
+    """
+    A = np.exp(a*x+a**2*s**2/2.)
+    B = np.exp(b*x+b**2*s**2/2.)
+    ua = (x+a*s**2)*2**-0.5/s
+    ub = (x+b*s**2)*2**-0.5/s
+    return (A*(1+erf(ua))+F*B*erfc(ub))
