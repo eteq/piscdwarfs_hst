@@ -14,8 +14,8 @@ class RGBModel(object):
 
     def __init__(self, magdata, magunc=None, tipprior=None):
 
-        self.magdata = magdata
-        self.magunc = magunc
+        self.magdata = np.array(magdata)
+        self.magunc = None if magunc is None else np.array(magunc)
 
         self.maxdata = np.max(magdata)
         self.mindata = np.min(magdata)
@@ -60,8 +60,11 @@ class RGBModel(object):
 
             return lnpall - lnN
         else:
-            return np.log(exp_gauss_conv(dmags, self.alphargb, self.alphaother,
-                                                self.fracother, self.magunc))
+            dmag_upper = self.maxdata - tipmag
+            dmag_lower = self.mindata - tipmag
+            return np.log(exp_gauss_conv_normed(dmags, alphargb, alphaother,
+                                                fracother, self.magunc,
+                                                dmag_lower, dmag_upper))
 
     def __call__(self, params):
         lpri = self.lnpri(*params)
@@ -97,8 +100,6 @@ class RGBModel(object):
         from astropy.utils import isiterable
         from matplotlib import pyplot as plt
 
-
-
         if isiterable(magrng):
             fakemod = self.__class__(magrng)
         else:
@@ -114,7 +115,16 @@ class RGBModel(object):
         return fakemod.magdata, lnpb
 
 
-def exp_gauss_conv(x, a=1, b=1, F=0, s=.1):
+def exp_gauss_conv_normed(x, a, b, F, s, x_lower, x_upper):
+    # from scipy.integrate import quad
+    # N = quad(exp_gauss_conv, x_lower, x_upper, args=(a, b, F, np.mean(s)))[0]
+    # return exp_gauss_conv(x, a, b, F, s)/N
+    norm_term_a = exp_gauss_conv_int(x_upper, a, s, g=1) - exp_gauss_conv_int(x_lower, a, s, g=1)
+    norm_term_b = exp_gauss_conv_int(x_upper, b, s, g=-1) - exp_gauss_conv_int(x_lower, b, s, g=-1)
+    return exp_gauss_conv(x, a, b, F, s)/(norm_term_a + F * norm_term_b)
+
+
+def exp_gauss_conv(x, a, b, F, s):
     """
     Convolution of broken power law w/ gaussian.
     """
@@ -123,3 +133,14 @@ def exp_gauss_conv(x, a=1, b=1, F=0, s=.1):
     ua = (x+a*s**2)*2**-0.5/s
     ub = (x+b*s**2)*2**-0.5/s
     return (A*(1+erf(ua))+F*B*erfc(ub))
+
+
+def exp_gauss_conv_int(x, ab, s, g=1):
+    """
+    Integral for a *single* term of exp_gauss_conv.
+    g should be 1/-1
+    """
+    prefactor = np.exp(ab**2*s**2/2 + ab*x)
+    term1 = prefactor * (1 + g * erf((ab*s**2+x)*2**-0.5/s))
+    term2 = g*erf(x*2**-0.5/s)
+    return (prefactor*term1 - term2)/ ab
