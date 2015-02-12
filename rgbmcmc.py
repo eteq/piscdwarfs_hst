@@ -12,7 +12,7 @@ MINF = -np.inf
 class RGBModel(object):
     PARAM_NAMES = 'tipmag, alphargb, alphaother, fracother'.split(', ')
 
-    def __init__(self, magdata, magunc=None, tipprior=None):
+    def __init__(self, magdata, magunc=None, tipprior=None, fracotherprior=None):
 
         self.magdata = np.array(magdata)
         self.magunc = None if magunc is None else np.array(magunc)
@@ -21,6 +21,7 @@ class RGBModel(object):
         self.mindata = np.min(magdata)
 
         self.tipprior = tipprior
+        self.fracotherprior = fracotherprior
 
     def lnpri(self, tipmag, alphargb, alphaother, fracother):
         #flat priors on everything to start with
@@ -37,6 +38,10 @@ class RGBModel(object):
 
         if self.tipprior is not None:
             if not (self.tipprior[0] < tipmag < self.tipprior[1]):
+                return MINF
+
+        if self.fracotherprior is not None:
+            if not (self.fracotherprior[0] < fracother < self.fracotherprior[1]):
                 return MINF
 
         return lpri
