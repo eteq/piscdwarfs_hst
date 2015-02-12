@@ -140,7 +140,13 @@ def exp_gauss_conv_int(x, ab, s, g=1):
     Integral for a *single* term of exp_gauss_conv.
     g should be 1/-1
     """
-    prefactor = np.exp(ab**2*s**2/2 + ab*x)
-    term1 = prefactor * (1 + g * erf((ab*s**2+x)*2**-0.5/s))
-    term2 = g*erf(x*2**-0.5/s)
-    return (prefactor*term1 - term2)/ ab
+    prefactor = np.exp(-ab**2*s**2 / 2.) / ab
+    term1 = np.exp(ab*(ab*s**2 + x))*(1 + g * erf((ab*s**2 + x)*2**-0.5/s))
+    term2 = np.exp(ab**2*s**2 / 2.)*g*erf(x * 2**-0.5 / s)
+    return prefactor*(term1 - term2)
+
+
+    # prefactor = np.exp(ab**2*s**2/2 + ab*x)
+    # term1 = prefactor * (1 + g * erf((ab*s**2+x)*2**-0.5/s))
+    # term2 = g*erf(x*2**-0.5/s)
+    # return (prefactor*term1 - term2)/ ab
