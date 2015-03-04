@@ -10,9 +10,10 @@ MINF = -np.inf
 
 
 class RGBModel(object):
-    PARAM_NAMES = 'tipmag, alphargb, alphaother, fracother'.split(', ')
+    PARAM_NAMES = 'tipmag, alphargb, alphaother, fracother, cencolor, sigcolor'.split(', ')
 
-    def __init__(self, magdata, magunc=None, tipprior=None, fracotherprior=None):
+    def __init__(self, magdata, magunc=None, tipprior=None, fracotherprior=None,
+                       colordataunc=None, colornstars=50):
 
         self.magdata = np.array(magdata)
         self.magunc = None if magunc is None else np.array(magunc)
@@ -23,7 +24,10 @@ class RGBModel(object):
         self.tipprior = tipprior
         self.fracotherprior = fracotherprior
 
-    def lnpri(self, tipmag, alphargb, alphaother, fracother):
+        self.colordataunc = colordataunc
+        self.colormagrng = colormagrng
+
+    def lnpri(self, tipmag, alphargb, alphaother, fracother, cencolor, sigcolor):
         #flat priors on everything to start with
         lpri = 0.0
 
@@ -44,14 +48,20 @@ class RGBModel(object):
             if not (self.fracotherprior[0] < fracother < self.fracotherprior[1]):
                 return MINF
 
+        if not (0 < cencolor < 1.5):
+            return MINF
+        if not (0 < sigcolor < 0.5):
+            return MINF
+
         return lpri
 
-    def lnprob(self, tipmag, alphargb, alphaother, fracother):
+    def lnprob(self, tipmag, alphargb, alphaother, fracother, cencolor, sigcolor):
         """
         This does *not* sum up the lnprobs - that goes in __call__.  Instead it
         gives the lnprob per data point
         """
         dmags = self.magdata - tipmag
+
         if self.magunc is None:
             rgbmsk = dmags > 0
             lnpall = np.zeros_like(dmags)
@@ -63,13 +73,25 @@ class RGBModel(object):
             eterm2 = np.exp(alphargb*(self.maxdata - tipmag)) - 1
             lnN = np.log(fracother * eterm1 / alphaother + eterm2 / alphargb)
 
-            return lnpall - lnN
+            lnprgb = lnpall - lnN
         else:
             dmag_upper = self.maxdata - tipmag
             dmag_lower = self.mindata - tipmag
-            return np.log(exp_gauss_conv_normed(dmags, alphargb, alphaother,
-                                                fracother, self.magunc,
-                                                dmag_lower, dmag_upper))
+            lnprgb = np.log(exp_gauss_conv_normed(dmags, alphargb, alphaother,
+                                                  fracother, self.magunc,
+                                                  dmag_lower, dmag_upper))
+
+        if self.colordataunc is None:
+            lnpcolor = 0
+        else:
+            colormsk = (0 < dmags) & (dmags < self.colormagrng)
+            lnpcolor = np.zeros(len(colormsk))
+
+            datamsk = self.colordataunc[0][colormsk]
+            sigmsk = np.hypot(self.colordataunc[1][colormsk], sigcolor)
+            lnpcolor[colormsk] = -0.5*((datamsk - cencolor)/sigmsk)**2 - np.log(sigmsk)
+
+        return lnprgb + lnpcolor
 
     def __call__(self, params):
         lpri = self.lnpri(*params)
@@ -92,11 +114,12 @@ class RGBModel(object):
             res = None
         return sampler, res
 
-    def initalize_params(self, nwalkers, tipmag0=23, alphargb0=1.5, alphaother0=0.5, fracother0=.1):
-        return emcee.utils.sample_ball([tipmag0, alphargb0, alphaother0, fracother0],
+    def initalize_params(self, nwalkers, tipmag0=23, alphargb0=1.5, alphaother0=0.5, fracother0=.1, cencolor0=.9, sigcolor0=.1):
+        return emcee.utils.sample_ball([tipmag0, alphargb0, alphaother0, fracother0, cencolor0, sigcolor0],
                                        [1e-3]*len(RGBModel.PARAM_NAMES), nwalkers)
 
-    def plot_lnprob(self, tipmag, alphargb, alphaother, fracother, magrng=100, doplot=True, delog=False):
+    def plot_lnprob(self, tipmag, alphargb, alphaother, fracother, cencolor, sigcolor,
+                          magrng=100, doplot=True, delog=False):
         """
         Plots (optionally) and returns arrays suitable for plotting the pdf. If
         `magrng` is a scalar, it gives the number of samples over the data
