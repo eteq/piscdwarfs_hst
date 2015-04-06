@@ -151,7 +151,78 @@ def exp_gauss_conv_int(x, ab, s, g=1):
     return prefactor*(term1 - term2)
 
 
-    # prefactor = np.exp(ab**2*s**2/2 + ab*x)
-    # term1 = prefactor * (1 + g * erf((ab*s**2+x)*2**-0.5/s))
-    # term2 = g*erf(x*2**-0.5/s)
-    # return (prefactor*term1 - term2)/ ab
+class NormalColorModel(object):
+    PARAM_NAMES = 'colorcen, colorsig, askew'.split(', ')
+
+    def __init__(self, magdata, tipdistr, colordata, colorunc, nstarsbelow=100,
+                       cenprior=[0.6, 1.2], sigprior=[0, 1], askewprior=[-1, 1]):
+
+        self.magdata = np.array(magdata)
+        self.colordata = np.array(colordata)
+        self.colorunc = None if colorunc is None else np.array(colorunc)
+
+        self.tipdistr = np.array(tipdistr)
+        self._len_tipdistr = self.tipdistr.size
+        self.nstarsbelow = nstarsbelow
+        self.cenprior = cenprior
+        self.sigprior = sigprior
+        self.askewprior = askewprior
+
+    def lnpri(self, colorcen, colorsig, askew):
+        if not (self.cenprior[0] < colorcen < self.cenprior[1]):
+            return MINF
+        if not (self.sigprior[0] < colorsig < self.sigprior[1]):
+            return MINF
+        if not (self.askewprior[0] < colorsig < self.askewprior[1]):
+            return MINF
+
+        return 0.0
+
+    def lnprob(self, colorcen, colorsig, askew, tipmag):
+        """
+        This does *not* sum up the lnprobs - that goes in __call__.  Instead it
+        gives the lnprob per data point
+        """
+        from scipy.special import erf
+
+        sorti = np.argsort(self.magdata)
+        idxs = sorti[np.in1d(sorti, np.where(self.magdata > tipmag)[0])]
+        msk = idxs[:self.nstarsbelow]
+        assert len(self.magdata[msk]) == self.nstarsbelow
+        assert np.all(self.magdata[msk] > tipmag)
+
+        sig = np.hypot(self.colorunc[msk], colorsig)
+        x = (self.colordata[msk]-colorcen)/sig
+        lnpnorm = -0.5*(x**2 + np.log(sig))
+        lnpskew = np.log1p(erf(askew*x*2**-0.5))
+        return lnpnorm+lnpskew, tipmag
+
+    def __call__(self, params):
+        lpri = self.lnpri(*params)
+        tipmag = self.tipdistr[np.random.randint(self._len_tipdistr)]
+        if lpri == MINF:
+            return MINF, tipmag
+        else:
+            params = list(params)
+            params.append(tipmag)
+            lnp, tipmag = self.lnprob(*params)
+            return lpri + np.sum(lnp), tipmag
+
+    def make_and_run_sampler(self, nwalkers=len(PARAM_NAMES)*6, niters=0, burnin=None,
+                                   colorcen0=0.8, colorsig0=0.5, askew0=0):
+        sampler = emcee.EnsembleSampler(nwalkers, len(self.PARAM_NAMES), self)
+        if niters > 0:
+            p0 = self.initalize_params(nwalkers, colorcen0=colorcen0, colorsig0=colorsig0, askew0=askew0)
+            if burnin:
+                resb = sampler.run_mcmc(p0, burnin)
+                sampler.reset()
+                res = sampler.run_mcmc(resb[0], niters)
+            else:
+                res = sampler.run_mcmc(p0, niters)
+        else:
+            res = None
+        return sampler, res
+
+    def initalize_params(self, nwalkers, colorcen0=0.8, colorsig0=0.5, askew0=0):
+        return emcee.utils.sample_ball([colorcen0, colorsig0, askew0],
+                                       [1e-3]*len(self.PARAM_NAMES), nwalkers)
