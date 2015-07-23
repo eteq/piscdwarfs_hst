@@ -1,0 +1,13 @@
+Relevant columns:
+
+(1) log lookback time initial [yr]
+(2) log lookback time final [yr]
+(4) most likely SFR [Msun/yr]
+(5) upper uncertainty on SFR (i.e., columns 4+5 = upper bound for plotting)
+(6) lower uncertainty on SFR
+
+(13) Most likely cumulative SFH
+(14) upper uncertainty on cumulative SFH (i.e., columns 13 + 14 = upper bound for plotting)
+(15) lower uncertainty on cumulative SFH
+
+Columns (7) - (12) contains information about the metallicity solution, which I don’t think it relevant for this work.
